@@ -1,308 +1,160 @@
+import React, { useState, useEffect } from 'react';
+import { initializeApp } from "firebase/app";
+import { getDatabase, ref, onValue, set, push, update } from "firebase/database";
+import { Plus, Users, RotateCcw, CheckCircle2, Banknote, History, Trash2 } from 'lucide-react';
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { 
-  Plus, 
-  Users, 
-  RotateCcw,
-  CheckCircle2,
-  Banknote,
-  Undo2,
-  X,
-  History as HistoryIcon
-} from 'lucide-react';
-import { Player, Transaction, GameSession } from './types';
-import PlayerCard from './components/PlayerCard';
-import StatsOverview from './components/StatsOverview';
-import AddPlayerModal from './components/AddPlayerModal';
-import SettlementView from './components/SettlementView';
-import HistoryView from './components/HistoryView';
+// --- คอนฟิก Firebase ของคุณ ---
+const firebaseConfig = {
+  apiKey: "AIzaSyBB-zyqFADwGrINkMk-eZjMEaeN1Ar895Y",
+  authDomain: "poker-chip-app-7dd1b.firebaseapp.com",
+  databaseURL: "https://poker-chip-app-7dd1b-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "poker-chip-app-7dd1b",
+  storageBucket: "poker-chip-app-7dd1b.firebasestorage.app",
+  messagingSenderId: "285173003133",
+  appId: "1:285173003133:web:783cb2734db5089b4ed214",
+  measurementId: "G-PSPDMB0CB6"
+};
 
-const App: React.FC = () => {
-  const [players, setPlayers] = useState<Player[]>([]);
-  const [history, setHistory] = useState<GameSession[]>([]);
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [showSettlement, setShowSettlement] = useState(false);
-  const [showHistory, setShowHistory] = useState(false);
-  
-  // Undo State
-  const [lastDeletedPlayer, setLastDeletedPlayer] = useState<Player | null>(null);
-  const undoTimerRef = useRef<number | null>(null);
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
 
-  // Load state on mount
+const PokerApp = () => {
+  const [players, setPlayers] = useState<any>({});
+  const [playerName, setPlayerName] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  // ดึงข้อมูล Real-time จาก Firebase
   useEffect(() => {
-    const savedActive = localStorage.getItem('poker_group_state');
-    const savedHistory = localStorage.getItem('poker_history');
-    
-    if (savedActive) {
-      try { setPlayers(JSON.parse(savedActive)); } catch (e) { console.error(e); }
-    }
-    if (savedHistory) {
-      try { setHistory(JSON.parse(savedHistory)); } catch (e) { console.error(e); }
-    }
+    const playersRef = ref(db, 'players');
+    return onValue(playersRef, (snapshot) => {
+      const data = snapshot.val();
+      setPlayers(data || {});
+      setLoading(false);
+    });
   }, []);
 
-  // Sync active state
-  useEffect(() => {
-    localStorage.setItem('poker_group_state', JSON.stringify(players));
-  }, [players]);
-
-  // Sync history state
-  useEffect(() => {
-    localStorage.setItem('poker_history', JSON.stringify(history));
-  }, [history]);
-
-  const addPlayer = (name: string) => {
-    const newPlayer: Player = {
-      id: crypto.randomUUID(),
-      name,
+  // ฟังก์ชันเพิ่มผู้เล่น
+  const addPlayer = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!playerName.trim()) return;
+    const playersRef = ref(db, 'players');
+    const newPlayerRef = push(playersRef);
+    set(newPlayerRef, {
+      name: playerName,
       buyIn: 0,
       cashOut: 0,
-      transactions: []
-    };
-    setPlayers([...players, newPlayer]);
-    setIsAddModalOpen(false);
+      status: 'playing'
+    });
+    setPlayerName('');
   };
 
-  const removePlayer = (id: string) => {
-    const playerToRemove = players.find(p => p.id === id);
-    if (playerToRemove) {
-      if (undoTimerRef.current) window.clearTimeout(undoTimerRef.current);
-      setLastDeletedPlayer(playerToRemove);
-      setPlayers(players.filter(p => p.id !== id));
-      undoTimerRef.current = window.setTimeout(() => {
-        setLastDeletedPlayer(null);
-      }, 6000);
-    }
+  // ฟังก์ชันอัปเดตยอด Chip (Buy-in / Cash-out)
+  const updateAmount = (id: string, type: 'buyIn' | 'cashOut', amount: number) => {
+    const playerRef = ref(db, `players/${id}`);
+    const currentAmount = players[id][type] || 0;
+    update(playerRef, {
+      [type]: currentAmount + amount
+    });
   };
 
-  const undoDelete = () => {
-    if (lastDeletedPlayer) {
-      setPlayers(prev => [...prev, lastDeletedPlayer]);
-      setLastDeletedPlayer(null);
-      if (undoTimerRef.current) window.clearTimeout(undoTimerRef.current);
-    }
-  };
-
-  const updateBuyIn = (id: string, amount: number) => {
-    setPlayers(players.map(p => {
-      if (p.id === id) {
-        const newTransaction: Transaction = {
-          id: crypto.randomUUID(),
-          type: 'buy-in',
-          amount,
-          timestamp: Date.now()
-        };
-        return {
-          ...p,
-          buyIn: p.buyIn + amount,
-          transactions: [...p.transactions, newTransaction]
-        };
-      }
-      return p;
-    }));
-  };
-
-  const updateCashOut = (id: string, amount: number) => {
-    setPlayers(players.map(p => {
-      if (p.id === id) {
-        const withoutCashOut = p.transactions.filter(t => t.type !== 'cash-out');
-        const newTransaction: Transaction = {
-          id: crypto.randomUUID(),
-          type: 'cash-out',
-          amount,
-          timestamp: Date.now()
-        };
-        return {
-          ...p,
-          cashOut: amount,
-          transactions: [...withoutCashOut, newTransaction]
-        };
-      }
-      return p;
-    }));
-  };
-
+  // ฟังก์ชัน Reset วง (ลบข้อมูลทั้งหมดเพื่อเริ่มเกมใหม่)
   const resetGame = () => {
-    if (window.confirm('คุณต้องการเริ่มเกมใหม่ทั้งหมดใช่หรือไม่? ข้อมูลของโต๊ะปัจจุบันจะหายไป')) {
-      setPlayers([]);
-      setLastDeletedPlayer(null);
-      localStorage.removeItem('poker_group_state');
+    if (window.confirm("คุณต้องการล้างข้อมูลทั้งหมดเพื่อเริ่มเกมใหม่ใช่หรือไม่?")) {
+      set(ref(db, 'players'), null);
     }
   };
 
-  const archiveSession = () => {
-    const newSession: GameSession = {
-      id: crypto.randomUUID(),
-      date: Date.now(),
-      players: [...players],
-      totalBuyIn,
-      totalCashOut,
-      totalFees
-    };
-    setHistory([newSession, ...history]);
-    setPlayers([]);
-    setShowSettlement(false);
-    localStorage.removeItem('poker_group_state');
-  };
+  const totalBuyIn = Object.values(players).reduce((sum: number, p: any) => sum + (p.buyIn || 0), 0);
+  const totalCashOut = Object.values(players).reduce((sum: number, p: any) => sum + (p.cashOut || 0), 0);
 
-  const totalBuyIn = useMemo(() => players.reduce((acc, p) => acc + p.buyIn, 0), [players]);
-  const totalCashOut = useMemo(() => players.reduce((acc, p) => acc + p.cashOut, 0), [players]);
-  
-  const totalFees = useMemo(() => 
-    players.filter(p => p.buyIn > 0).length * 400
-  , [players]);
-
-  const tableChipsAvailable = totalBuyIn - totalFees;
-  const balanceDifference = tableChipsAvailable - totalCashOut;
-
-  const canSettle = players.length > 0 && Math.abs(balanceDifference) === 0 && totalCashOut > 0;
+  if (loading) return <div className="flex h-screen items-center justify-center bg-slate-900 text-white">กำลังโหลดข้อมูล...</div>;
 
   return (
-    <div className="h-screen-dynamic bg-slate-950 text-slate-50 flex flex-col selection:bg-indigo-500/30 overflow-hidden relative">
-      <header className="flex-none pt-safe bg-slate-950/80 backdrop-blur-xl border-b border-slate-800/50 z-40">
-        <div className="max-w-xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="bg-gradient-to-br from-indigo-500 to-indigo-700 p-2 rounded-xl shadow-lg shadow-indigo-500/20">
-              <Banknote className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <h1 className="text-lg font-bold tracking-tight leading-none">Poker Group</h1>
-            </div>
-          </div>
-          <div className="flex items-center gap-1">
-            <button 
-              onClick={() => setShowHistory(true)}
-              className="p-2.5 text-slate-400 hover:text-indigo-400 active:bg-slate-900 rounded-full transition-all"
-              title="ประวัติการเล่น"
-            >
-              <HistoryIcon className="w-5 h-5" />
-            </button>
-            <button 
-              onClick={resetGame}
-              className="p-2.5 text-slate-400 hover:text-rose-400 active:bg-slate-900 rounded-full transition-all"
-              title="ล้างโต๊ะ"
-            >
-              <RotateCcw className="w-5 h-5" />
+    <div className="min-h-screen bg-slate-950 text-slate-100 p-4 font-sans">
+      <div className="max-w-md mx-auto space-y-6">
+        
+        {/* Header & Stats */}
+        <div className="bg-slate-900 p-6 rounded-3xl border border-slate-800 shadow-xl">
+          <div className="flex justify-between items-center mb-4">
+            <h1 className="text-2xl font-bold flex items-center gap-2">
+              <Banknote className="text-emerald-400" /> Poker Chip
+            </h1>
+            <button onClick={resetGame} className="p-2 text-slate-400 hover:text-red-400 transition-colors">
+              <RotateCcw size={20} />
             </button>
           </div>
-        </div>
-      </header>
-
-      <main className="flex-1 overflow-y-auto px-4 pt-4 pb-48 no-scrollbar max-w-xl mx-auto w-full space-y-6">
-        <StatsOverview 
-          totalBuyIn={totalBuyIn} 
-          totalCashOut={totalCashOut} 
-          balanceDifference={balanceDifference}
-          playerCount={players.length}
-          totalFees={totalFees}
-        />
-
-        <div className="flex items-center justify-between px-1">
-          <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 flex items-center gap-2">
-            <Users className="w-4 h-4" /> 
-            Active Table ({players.length})
-          </h2>
-        </div>
-
-        <div className="grid grid-cols-1 gap-4">
-          {players.length === 0 ? (
-            <div className="bg-slate-900/30 border border-dashed border-slate-800 rounded-3xl p-12 text-center">
-              <div className="bg-slate-800/50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
-                <Users className="w-8 h-8 text-slate-600" />
-              </div>
-              <p className="text-slate-500 text-sm font-medium">No active table.<br/>Add players or check History.</p>
+          
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-slate-800/50 p-3 rounded-2xl">
+              <p className="text-xs text-slate-400 uppercase tracking-wider">Total Buy-in</p>
+              <p className="text-xl font-mono text-emerald-400">{totalBuyIn.toLocaleString()}</p>
             </div>
-          ) : (
-            players.map(player => (
-              <PlayerCard 
-                key={player.id}
-                player={player}
-                onAddBuyIn={(amt) => updateBuyIn(player.id, amt)}
-                onSetCashOut={(amt) => updateCashOut(player.id, amt)}
-                onRemove={() => removePlayer(player.id)}
-              />
-            ))
-          )}
-        </div>
-      </main>
-
-      {lastDeletedPlayer && (
-        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 w-full max-w-xs px-4 z-50 animate-in slide-in-from-bottom-4 duration-300">
-          <div className="bg-slate-900/95 backdrop-blur-md border border-slate-700/50 rounded-2xl shadow-2xl p-3 flex items-center justify-between overflow-hidden relative group">
-            <div className="flex items-center gap-3">
-              <div className="bg-rose-500/10 p-2 rounded-xl">
-                <X className="w-4 h-4 text-rose-400" />
-              </div>
-              <div className="flex flex-col">
-                <span className="text-xs font-bold text-slate-200">{lastDeletedPlayer.name} removed</span>
-              </div>
-            </div>
-            <button 
-              onClick={undoDelete}
-              className="flex items-center gap-1.5 bg-indigo-500 hover:bg-indigo-400 text-white px-3 py-1.5 rounded-xl text-xs font-black transition-all active:scale-95 shadow-lg shadow-indigo-500/20"
-            >
-              <Undo2 className="w-3.5 h-3.5" /> UNDO
-            </button>
-            <div className="absolute bottom-0 left-0 h-1 bg-indigo-500/30 w-full">
-              <div className="h-full bg-indigo-500 animate-[shrink_6s_linear_forwards]" style={{width: '100%'}} />
+            <div className="bg-slate-800/50 p-3 rounded-2xl">
+              <p className="text-xs text-slate-400 uppercase tracking-wider">In Pot (Gap)</p>
+              <p className="text-xl font-mono text-orange-400">{(totalBuyIn - totalCashOut).toLocaleString()}</p>
             </div>
           </div>
         </div>
-      )}
 
-      <div className="fixed bottom-0 left-0 right-0 z-40 p-4 pb-safe bg-gradient-to-t from-slate-950 via-slate-950 to-transparent">
-        <div className="max-w-xl mx-auto flex gap-3 pb-4">
-          <button 
-            onClick={() => setIsAddModalOpen(true)}
-            className="flex-1 bg-slate-900 border border-slate-800 hover:bg-slate-800 text-white h-14 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95 shadow-xl shadow-black/40"
-          >
-            <Plus className="w-5 h-5 text-indigo-400" /> Player
+        {/* Add Player Form */}
+        <form onSubmit={addPlayer} className="flex gap-2">
+          <input
+            type="text"
+            value={playerName}
+            onChange={(e) => setPlayerName(e.target.value)}
+            placeholder="ชื่อผู้เล่น..."
+            className="flex-1 bg-slate-900 border border-slate-800 rounded-2xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all"
+          />
+          <button type="submit" className="bg-emerald-500 hover:bg-emerald-600 text-white p-3 rounded-2xl transition-all shadow-lg shadow-emerald-500/20">
+            <Plus />
           </button>
-          <button 
-            disabled={!canSettle}
-            onClick={() => setShowSettlement(true)}
-            className={`flex-[1.5] h-14 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95 shadow-xl
-              ${canSettle 
-                ? 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-500/20' 
-                : 'bg-slate-800 text-slate-500 cursor-not-allowed opacity-50'
-              }`}
-          >
-            <CheckCircle2 className="w-5 h-5" /> Calculate Payout
-          </button>
+        </form>
+
+        {/* Players List */}
+        <div className="space-y-3">
+          {Object.entries(players).map(([id, player]: [string, any]) => (
+            <div key={id} className="bg-slate-900 border border-slate-800 p-4 rounded-3xl shadow-sm">
+              <div className="flex justify-between items-start mb-3">
+                <h3 className="text-lg font-semibold flex items-center gap-2">
+                  <Users size={18} className="text-slate-400" /> {player.name}
+                </h3>
+                <div className="text-right font-mono">
+                  <p className={`text-sm ${player.cashOut - player.buyIn >= 0 ? 'text-emerald-400' : 'text-pink-500'}`}>
+                    {player.cashOut - player.buyIn > 0 ? '+' : ''}{(player.cashOut - player.buyIn).toLocaleString()}
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1">
+                  <span className="text-[10px] text-slate-500 uppercase ml-1">Buy-in: {player.buyIn}</span>
+                  <div className="flex gap-1">
+                    <button onClick={() => updateAmount(id, 'buyIn', 100)} className="flex-1 bg-slate-800 py-2 rounded-xl text-xs hover:bg-slate-700">+100</button>
+                    <button onClick={() => updateAmount(id, 'buyIn', 500)} className="flex-1 bg-slate-800 py-2 rounded-xl text-xs hover:bg-slate-700">+500</button>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <span className="text-[10px] text-slate-500 uppercase ml-1">Cash-out: {player.cashOut}</span>
+                  <div className="flex gap-1">
+                    <button onClick={() => updateAmount(id, 'cashOut', 100)} className="flex-1 bg-emerald-500/10 text-emerald-400 py-2 rounded-xl text-xs hover:bg-emerald-500/20">+100</button>
+                    <button onClick={() => updateAmount(id, 'cashOut', 500)} className="flex-1 bg-emerald-500/10 text-emerald-400 py-2 rounded-xl text-xs hover:bg-emerald-500/20">+500</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
+
+        {Object.keys(players).length === 0 && (
+          <div className="text-center py-20 text-slate-500">
+            <p>ยังไม่มีผู้เล่นในวง</p>
+            <p className="text-sm">เพิ่มชื่อเพื่อนเพื่อเริ่มบันทึก Chip</p>
+          </div>
+        )}
       </div>
-
-      <style>{`
-        @keyframes shrink {
-          from { width: 100%; }
-          to { width: 0%; }
-        }
-      `}</style>
-
-      {isAddModalOpen && (
-        <AddPlayerModal 
-          onClose={() => setIsAddModalOpen(false)} 
-          onSubmit={addPlayer} 
-        />
-      )}
-
-      {showSettlement && (
-        <SettlementView 
-          players={players} 
-          onClose={() => setShowSettlement(false)}
-          onArchive={archiveSession}
-        />
-      )}
-
-      {showHistory && (
-        <HistoryView 
-          history={history}
-          onClose={() => setShowHistory(false)}
-          onDeleteSession={(id) => setHistory(history.filter(s => s.id !== id))}
-        />
-      )}
     </div>
   );
 };
 
-export default App;
+export default PokerApp;
