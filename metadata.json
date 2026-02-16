@@ -1,0 +1,5 @@
+{
+  "name": "Poker Group",
+  "description": "A sophisticated poker chip management tool with real-time tracking of buy-ins, cash-outs, and profit/loss calculations. Features a built-in debt settlement algorithm to simplify payouts at the end of the night.",
+  "requestFramePermissions": []
+}
